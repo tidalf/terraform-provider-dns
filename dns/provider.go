@@ -90,6 +90,31 @@ func Provider() terraform.ResourceProvider {
 							Optional:    true,
 							DefaultFunc: schema.EnvDefaultFunc("DNS_UPDATE_KEYSECRET", nil),
 						},
+						"gssapi": &schema.Schema{
+							Type:        schema.TypeBool,
+							Optional:    true,
+							DefaultFunc: schema.EnvDefaultFunc("DNS_UPDATE_GSSAPI", nil),
+						},
+						"realm": &schema.Schema{
+							Type:        schema.TypeString,
+							Optional:    true,
+							DefaultFunc: schema.EnvDefaultFunc("DNS_UPDATE_REALM", nil),
+						},
+						"username": &schema.Schema{
+							Type:        schema.TypeString,
+							Optional:    true,
+							DefaultFunc: schema.EnvDefaultFunc("DNS_UPDATE_USERNAME", nil),
+						},
+						"password": &schema.Schema{
+							Type:        schema.TypeString,
+							Optional:    true,
+							DefaultFunc: schema.EnvDefaultFunc("DNS_UPDATE_PASSWORD", nil),
+						},
+						"keytab": &schema.Schema{
+							Type:        schema.TypeString,
+							Optional:    true,
+							DefaultFunc: schema.EnvDefaultFunc("DNS_UPDATE_KEYTAB", nil),
+						},
 					},
 				},
 			},
@@ -121,9 +146,10 @@ func Provider() terraform.ResourceProvider {
 
 func configureProvider(d *schema.ResourceData) (interface{}, error) {
 
-	var server, transport, timeout, keyname, keyalgo, keysecret string
+	var server, transport, timeout, keyname, keyalgo, keysecret, realm, username, password, keytab string
 	var port, retries int
 	var duration time.Duration
+	var gssapi bool
 
 	// if the update block is missing, schema.EnvDefaultFunc is not called
 	if v, ok := d.GetOk("update"); ok {
@@ -151,6 +177,21 @@ func configureProvider(d *schema.ResourceData) (interface{}, error) {
 		}
 		if val, ok := update["key_secret"]; ok {
 			keysecret = val.(string)
+		}
+		if val, ok := update["gssapi"]; ok {
+			gssapi = val.(bool)
+		}
+		if val, ok := update["realm"]; ok {
+			realm = val.(string)
+		}
+		if val, ok := update["username"]; ok {
+			username = val.(string)
+		}
+		if val, ok := update["password"]; ok {
+			password = val.(string)
+		}
+		if val, ok := update["keytab"]; ok {
+			keytab = val.(string)
 		}
 	} else {
 		if len(os.Getenv("DNS_UPDATE_SERVER")) > 0 {
@@ -197,6 +238,26 @@ func configureProvider(d *schema.ResourceData) (interface{}, error) {
 		if len(os.Getenv("DNS_UPDATE_KEYSECRET")) > 0 {
 			keysecret = os.Getenv("DNS_UPDATE_KEYSECRET")
 		}
+		if len(os.Getenv("DNS_UPDATE_GSSAPI")) > 0 {
+			var err error
+			gssapiStr := os.Getenv("DNS_UPDATE_GSSAPI")
+			gssapi, err = strconv.ParseBool(gssapiStr)
+			if err != nil {
+				return nil, fmt.Errorf("invalid DNS_UPDATE_GSSAPI environment variable: %s", err)
+			}
+		}
+		if len(os.Getenv("DNS_UPDATE_REALM")) > 0 {
+			keysecret = os.Getenv("DNS_UPDATE_REALM")
+		}
+		if len(os.Getenv("DNS_UPDATE_USERNAME")) > 0 {
+			keysecret = os.Getenv("DNS_UPDATE_USERNAME")
+		}
+		if len(os.Getenv("DNS_UPDATE_PASSWORD")) > 0 {
+			keysecret = os.Getenv("DNS_UPDATE_PASSWORD")
+		}
+		if len(os.Getenv("DNS_UPDATE_KEYTAB")) > 0 {
+			keysecret = os.Getenv("DNS_UPDATE_KEYTAB")
+		}
 	}
 
 	if timeout != "" {
@@ -225,6 +286,11 @@ func configureProvider(d *schema.ResourceData) (interface{}, error) {
 		keyname:   keyname,
 		keyalgo:   keyalgo,
 		keysecret: keysecret,
+		gssapi:    gssapi,
+		realm:     realm,
+		username:  username,
+		password:  password,
+		keytab:    keytab,
 	}
 
 	return config.Client()
@@ -339,7 +405,39 @@ func exchange(msg *dns.Msg, tsig bool, meta interface{}) (*dns.Msg, error) {
 	keyalgo := meta.(*DNSClient).keyalgo
 	c.Net = meta.(*DNSClient).transport
 	retries := meta.(*DNSClient).retries
+	g := meta.(*DNSClient).gss
 	retry_tcp := false
+
+	// GSS-TSIG
+	if tsig && g != nil {
+		realm := meta.(*DNSClient).realm
+		username := meta.(*DNSClient).username
+		password := meta.(*DNSClient).password
+		keytab := meta.(*DNSClient).keytab
+
+		var k *string
+		var err error
+
+		if realm != "" && username != "" && (password != "" || keytab != "") {
+			if password != "" {
+				k, _, err = g.NegotiateContextWithCredentials(srv_addr, realm, username, password)
+			} else {
+				k, _, err = g.NegotiateContextWithKeytab(srv_addr, realm, username, keytab)
+			}
+		} else {
+			k, _, err = g.NegotiateContext(srv_addr)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("Error negotiating GSS context: %s", err)
+		}
+
+		defer g.DeleteContext(k)
+
+		keyname = *k
+		c.TsigSecret[keyname] = ""
+
+		defer delete(c.TsigSecret, keyname)
+	}
 
 	msg.RecursionDesired = false
 
