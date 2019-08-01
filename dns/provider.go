@@ -50,17 +50,17 @@ func Provider() terraform.ResourceProvider {
 								return defaultPort, nil
 							},
 						},
-						"transport": &schema.Schema{
+						"transport": {
 							Type:        schema.TypeString,
 							Optional:    true,
 							DefaultFunc: schema.EnvDefaultFunc("DNS_UPDATE_TRANSPORT", defaultTransport),
 						},
-						"timeout": &schema.Schema{
+						"timeout": {
 							Type:        schema.TypeString,
 							Optional:    true,
 							DefaultFunc: schema.EnvDefaultFunc("DNS_UPDATE_TIMEOUT", defaultTimeout),
 						},
-						"retries": &schema.Schema{
+						"retries": {
 							Type:     schema.TypeInt,
 							Optional: true,
 							DefaultFunc: func() (interface{}, error) {
@@ -76,44 +76,55 @@ func Provider() terraform.ResourceProvider {
 							},
 						},
 						"key_name": {
-							Type:        schema.TypeString,
-							Optional:    true,
-							DefaultFunc: schema.EnvDefaultFunc("DNS_UPDATE_KEYNAME", nil),
+							Type:          schema.TypeString,
+							Optional:      true,
+							DefaultFunc:   schema.EnvDefaultFunc("DNS_UPDATE_KEYNAME", nil),
+							ConflictsWith: []string{"update.gssapi"},
 						},
 						"key_algorithm": {
-							Type:        schema.TypeString,
-							Optional:    true,
-							DefaultFunc: schema.EnvDefaultFunc("DNS_UPDATE_KEYALGORITHM", nil),
+							Type:          schema.TypeString,
+							Optional:      true,
+							DefaultFunc:   schema.EnvDefaultFunc("DNS_UPDATE_KEYALGORITHM", nil),
+							ConflictsWith: []string{"update.gssapi"},
 						},
 						"key_secret": {
-							Type:        schema.TypeString,
-							Optional:    true,
-							DefaultFunc: schema.EnvDefaultFunc("DNS_UPDATE_KEYSECRET", nil),
+							Type:          schema.TypeString,
+							Optional:      true,
+							DefaultFunc:   schema.EnvDefaultFunc("DNS_UPDATE_KEYSECRET", nil),
+							ConflictsWith: []string{"update.gssapi"},
 						},
-						"gssapi": &schema.Schema{
-							Type:        schema.TypeBool,
-							Optional:    true,
-							DefaultFunc: schema.EnvDefaultFunc("DNS_UPDATE_GSSAPI", nil),
-						},
-						"realm": &schema.Schema{
-							Type:        schema.TypeString,
-							Optional:    true,
-							DefaultFunc: schema.EnvDefaultFunc("DNS_UPDATE_REALM", nil),
-						},
-						"username": &schema.Schema{
-							Type:        schema.TypeString,
-							Optional:    true,
-							DefaultFunc: schema.EnvDefaultFunc("DNS_UPDATE_USERNAME", nil),
-						},
-						"password": &schema.Schema{
-							Type:        schema.TypeString,
-							Optional:    true,
-							DefaultFunc: schema.EnvDefaultFunc("DNS_UPDATE_PASSWORD", nil),
-						},
-						"keytab": &schema.Schema{
-							Type:        schema.TypeString,
-							Optional:    true,
-							DefaultFunc: schema.EnvDefaultFunc("DNS_UPDATE_KEYTAB", nil),
+						"gssapi": {
+							Type:     schema.TypeList,
+							MaxItems: 1,
+							Optional: true,
+							Elem: &schema.Resource{
+								Schema: map[string]*schema.Schema{
+									"realm": {
+										Type:        schema.TypeString,
+										Optional:    true,
+										DefaultFunc: schema.EnvDefaultFunc("DNS_UPDATE_REALM", nil),
+									},
+									"username": {
+										Type:        schema.TypeString,
+										Optional:    true,
+										DefaultFunc: schema.EnvDefaultFunc("DNS_UPDATE_USERNAME", nil),
+									},
+									"password": {
+										Type:          schema.TypeString,
+										Optional:      true,
+										DefaultFunc:   schema.EnvDefaultFunc("DNS_UPDATE_PASSWORD", nil),
+										ConflictsWith: []string{"update.gssapi.keytab"},
+										Sensitive:     true,
+									},
+									"keytab": {
+										Type:          schema.TypeString,
+										Optional:      true,
+										DefaultFunc:   schema.EnvDefaultFunc("DNS_UPDATE_KEYTAB", nil),
+										ConflictsWith: []string{"update.gssapi.password"},
+									},
+								},
+							},
+							ConflictsWith: []string{"update.key_name", "update.key_algorithm", "update.key_secret"},
 						},
 					},
 				},
@@ -179,19 +190,20 @@ func configureProvider(d *schema.ResourceData) (interface{}, error) {
 			keysecret = val.(string)
 		}
 		if val, ok := update["gssapi"]; ok {
-			gssapi = val.(bool)
-		}
-		if val, ok := update["realm"]; ok {
-			realm = val.(string)
-		}
-		if val, ok := update["username"]; ok {
-			username = val.(string)
-		}
-		if val, ok := update["password"]; ok {
-			password = val.(string)
-		}
-		if val, ok := update["keytab"]; ok {
-			keytab = val.(string)
+			g := val.([]interface{})[0].(map[string]interface{})
+			if val, ok := g["realm"]; ok {
+				realm = val.(string)
+			}
+			if val, ok := g["username"]; ok {
+				username = val.(string)
+			}
+			if val, ok := g["password"]; ok {
+				password = val.(string)
+			}
+			if val, ok := g["keytab"]; ok {
+				keytab = val.(string)
+			}
+			gssapi = true
 		}
 	} else {
 		if len(os.Getenv("DNS_UPDATE_SERVER")) > 0 {
@@ -238,25 +250,20 @@ func configureProvider(d *schema.ResourceData) (interface{}, error) {
 		if len(os.Getenv("DNS_UPDATE_KEYSECRET")) > 0 {
 			keysecret = os.Getenv("DNS_UPDATE_KEYSECRET")
 		}
-		if len(os.Getenv("DNS_UPDATE_GSSAPI")) > 0 {
-			var err error
-			gssapiStr := os.Getenv("DNS_UPDATE_GSSAPI")
-			gssapi, err = strconv.ParseBool(gssapiStr)
-			if err != nil {
-				return nil, fmt.Errorf("invalid DNS_UPDATE_GSSAPI environment variable: %s", err)
-			}
-		}
 		if len(os.Getenv("DNS_UPDATE_REALM")) > 0 {
-			keysecret = os.Getenv("DNS_UPDATE_REALM")
+			realm = os.Getenv("DNS_UPDATE_REALM")
 		}
 		if len(os.Getenv("DNS_UPDATE_USERNAME")) > 0 {
-			keysecret = os.Getenv("DNS_UPDATE_USERNAME")
+			username = os.Getenv("DNS_UPDATE_USERNAME")
 		}
 		if len(os.Getenv("DNS_UPDATE_PASSWORD")) > 0 {
-			keysecret = os.Getenv("DNS_UPDATE_PASSWORD")
+			password = os.Getenv("DNS_UPDATE_PASSWORD")
 		}
 		if len(os.Getenv("DNS_UPDATE_KEYTAB")) > 0 {
-			keysecret = os.Getenv("DNS_UPDATE_KEYTAB")
+			keytab = os.Getenv("DNS_UPDATE_KEYTAB")
+		}
+		if realm != "" || username != "" || password != "" || keytab != "" {
+			gssapi = true
 		}
 	}
 
