@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bodgit/tsig"
-	tsigdns "github.com/bodgit/tsig/client"
-	"github.com/bodgit/tsig/gss"
+	"github.com/tidalf/tsig"
+	tsigdns "github.com/tidalf/tsig/client"
+	"github.com/tidalf/tsig/gss"
 	"github.com/miekg/dns"
 )
 
