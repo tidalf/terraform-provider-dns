@@ -1,5 +1,7 @@
 module github.com/terraform-providers/terraform-provider-dns
 
+go 1.15
+
 require (
 	github.com/apparentlymart/go-cidr v0.0.0-20170616213631-2bd8b58cf427 // indirect
 	github.com/armon/go-radix v0.0.0-20160115234725-4239b77079c7 // indirect
